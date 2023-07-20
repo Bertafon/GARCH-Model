@@ -1,0 +1,818 @@
+---
+title: "Zaawansowana Analiza Szeregów Czasowych - projekt"
+author: "Norbert Burmistrzak & Michał Staniaszek"
+date: "30.06.2022"
+output: 
+  html_document:
+    theme: cerulean
+    toc: true
+    toc_float: true 
+---
+<style>
+body {
+text-align: justify}
+</style>
+
+<p style="text-align:left;">
+## **WSTĘP**
+</p>
+
+  Celem pracy było zbadanie ryzyka portfela kryptowalut zbudowanego według zadanego wzoru: na podstawie pierwszych
+liter imienia i nazwiska autorów pracy. Tym sposobem zbadano wartości rynkowe z ostatnich 3 lat następujących kryptowalut:
+
+  * BNB
+  * Monero
+  * Stellar
+  * Neo
+
+Oszacowano funkcje warunkowej wariancji za pomocą modeli klasy GARCH oraz 1% wartości narażonej na ryzyko (Value at Risk - VaR) w okresie out of sample. Dane wykorzystane w projekcie pochodzą ze strony https://www.coingecko.com/.
+
+<p style="text-align:left;">
+#### WCZYTANIE BIBLIOTEK
+</p>
+
+```{r message=FALSE, warning=FALSE}
+
+library('readr')
+library('xts')
+library('dygraphs')
+library('car')
+library('FinTS')
+library('fBasics')
+library('tseries')
+library('rugarch')
+
+```
+
+<p style="text-align:left;">
+## **PRZYGOTOWANIE DANYCH**
+</p>
+
+```{r message=FALSE}
+bnb <- read_csv("BNB.csv")
+neo <- read_csv("Neo.csv")
+monero <- read_csv("Monero.csv")
+stellar <- read_csv("Stellar.csv")
+```
+
+##### UCIĘCIE OBSERWACJI
+
+Wybrano maksymalną liczbę obserwacji dla kryptowaluty będącej najkrócej na rynku, tak by każdy szereg miał tą samą długość. 
+
+```{r}
+bnb = tail(bnb, n = 1747)
+neo = tail(neo, n = 1747)
+monero = tail(monero, n = 1747)
+stellar = tail(stellar, n = 1747)
+
+```
+
+##### ZMIANA FORMATU DATY
+
+```{r}
+bnb$Date <- as.Date(format(as.POSIXlt(bnb$snapped_at), format = "%Y-%m-%d"))
+neo$Date <- as.Date(format(as.POSIXlt(neo$snapped_at), format = "%Y-%m-%d"))
+monero$Date <- as.Date(format(as.POSIXlt(monero$snapped_at), format = "%Y-%m-%d"))
+stellar$Date <- as.Date(format(as.POSIXlt(stellar$snapped_at), format = "%Y-%m-%d"))
+```
+
+##### FORMATOWANIE KOLUMN
+
+```{r}
+bnb = bnb[c(5,3,2)]
+neo = neo[c(5,3,2)]
+monero = monero[c(5,3,2)]
+stellar = stellar[c(5,3,2)]
+
+colnames(bnb) = c("Date","B_market_cup","B_price")
+colnames(neo) = c("Date","N_market_cup","N_price")
+colnames(monero) = c("Date","M_market_cup","M_price")
+colnames(stellar) = c("Date","S_market_cup","S_price")
+```
+
+##### ŁĄCZENIE TABEL 
+
+```{r}
+data = merge(bnb, monero, by.x = "Date", by.y = "Date")
+data = merge(data, neo, by.x = "Date", by.y = "Date")
+data = merge(data, stellar, by.x = "Date", by.y = "Date")
+```
+
+Transofrmacja danych i połączenie ich w zbiorową tabele pozwala przejść do budowy portfela składającego się ze wszystkich 4 wybranych wcześniej kryptowalut 
+
+<p style="text-align:left;">
+## **BUDOWA PORTFELA**
+</p>
+
+```{r}
+data$total_market_cup = data$B_market_cup + data$M_market_cup + data$N_market_cup + data$S_market_cup
+
+data$B_p = data$B_market_cup/data$total_market_cup
+data$N_p = data$N_market_cup/data$total_market_cup
+data$M_p = data$M_market_cup/data$total_market_cup
+data$S_p = data$S_market_cup/data$total_market_cup
+```
+
+##### FORMATOWANIE KOLUMN 
+
+```{r}
+data = data[-c(2, 4, 6, 8, 10)]
+```
+
+##### STOPY ZWROTU
+
+```{r}
+data$B_r = diff.xts(log(data$B_price))
+data$N_r = diff.xts(log(data$N_price))
+data$M_r = diff.xts(log(data$M_price))
+data$S_r = diff.xts(log(data$S_price))
+```
+
+##### STOPA ZWROTU Z PORTFELA 
+
+```{r}
+data$total_r = (data$B_p*data$B_r
+                +data$S_p*data$S_r
+                +data$M_p*data$M_r
+                +data$N_p*data$N_r)
+```
+
+##### UDZIAŁ W CZASIE 
+
+```{r}
+share_xts = xts(data[, c("B_p", "N_p", "S_p", "M_p")], order.by = data$Date)
+tot_ret_xts = xts(data[, c("total_r")], order.by = as.Date(data$Date))
+close_xts = xts(data[, c("B_price", "N_price", "S_price", "M_price")], order.by = data$Date)
+```
+
+##### CENY ZAMKNIECIA
+
+```{r}
+dygraph(close_xts, main = 'Ceny zamknięcia') %>%
+  dyRangeSelector(height = 50)
+```
+
+##### PROFIL PORTFELOWY 
+
+```{r}
+dygraph(share_xts, main = "Profil portfelowy") %>%
+  dyRangeSelector(height = 40)
+```
+
+  Przez okres pierwszych 3 lat nasz portfel jest zdywersyfikowany, natomiast w okolicach lutego 2021 BNB zaczyna stanowić średnio 60-80% wartości całego portfela, wiąże się to przede wszystkim z kilkutysięczno procentowym skokiem wartości ceny dla  kryptowaluty. Bardzo zbliżone zachowanie wartości na rynku jest widoczne dla walut Monero oraz Neo. BNB cechowało się trendem wzrostowym przez większość analizowane okresu z minimalnym załamaniem w grudniu 2020. Z powodu znacznego wzrostu BNB udział zarówno Monero jak i NEO spadł poniżej 10%, a dla Stellar jest to jedynie 1%. 
+
+
+
+##### STOPY ZWROTOW
+
+```{r}
+dygraph(tot_ret_xts, main="Stopy zwrotów") %>% 
+  dyRangeSelector(height = 50)
+```
+
+
+##### BADANIE AUTOKORELACJI RESZT 
+
+```{r}
+# Wykres ACF dla zwrotow z portfela
+acf(data$total_r, lag.max = 36, na.action = na.pass,
+    ylim = c(-0.4, 0.4), 
+    col = "darkblue", lwd = 7,
+    main = "Wykres ACF zwrotów z portfela")
+```
+
+Dla wykresu ACF można zaobserwować występowanie trendu. Stopniowe wygaszanie jest przerywane cykliczną istotnościa jednego z opóźnień. Warto potwierdzić obserwacje wizualne formalnym testem Durbina - Watsona 
+
+```{r}
+durbinWatsonTest(lm(data$total_r ~ 1),
+                 max.lag = 5)
+```
+
+Test Durbina - Watsona wskazuje na autokorelacje dla 1 i 2 opóźnienia.
+
+```{r}
+# Wykresy ACF^2 dla zwrotow z portfela (efekty ARCH)
+acf(data$total_r^2, lag.max = 100, na.action = na.pass,
+    ylim = c(-0.3, 0.3),
+    col = "darkblue", lwd = 7,
+    main = "Wykres ACF kwadratów zwrotów z portfela")
+```
+
+```{r}
+#test ARCH 
+ArchTest(data$total_r, lags = 5)
+```
+
+P-value w LM testująca występowanie efektów ARCH jest bliskie 0, co oznacza, że należy odrzucić H0 mówiącą o braku występowania efektów ARCH.
+
+```{r}
+#Test na autokorelacje kwadratów reszt  -> autokorelacja dla 1% poziomu istotności
+durbinWatsonTest(lm(data$total_r^2 ~ 1),
+                 max.lag = 5) 
+```
+
+Na poziomie istotności 10% dla wszystkich 5 opóźnień odrzucamy H0 mówiącą o braku autokorelacji kwadratów zwrotów
+
+```{r}
+#Porównanie rozkładu z rozkładem normalnym 
+hist(data$total_r, prob = T, breaks = 50, main = "Histogram rozkładu stóp zwrotu portfela", xlab="returns", col="skyblue1")
+curve(dnorm(x, mean = mean(data$total_r, na.rm = T),
+            sd  = sd(data$total_r, na.rm = T)),
+      col = "darkblue", lwd = 2, add = TRUE,
+)
+```
+
+Histogram rozkładu stóp zwrotu z portfela wskazuje na rozkład leptokurtyczny. Osiągnięte maksimum jest dużo wyższe niż dla rozkładu normalnego, dodatkowo można zaobserwować grubsze ogony dla rozkładu empirycznego.  
+
+##### STATYSTYKI OPISOWE
+
+```{r}
+empstats <- basicStats(data$total_r)
+knitr::kable(as.matrix(empstats), digits = 2)
+```
+
+Statystyki zdają się potwierdzać analizę wizualną. Występuję skośność oraz dodatnia kurtoza, która również jest charakterystyczna dla rozkładu leptokurtycznego. 
+
+##### TEST NA NORMALNOSC 
+
+```{r}
+
+jbtest <- jarque.bera.test(na.omit(data$total_r)) 
+jbtest
+```
+
+Formalnym potwierdzeniem braku rozkładu normalnego jest przeprowadzenie testu Jarque-Bera. P-value w teście bliskie 0, a więc odrzucamy H0 o rozkładzie normalnym. 
+
+<p style="text-align:left;">
+## **GARCH**
+</p>
+
+```{r}
+# in sample (1246 obserwacji) 
+ins = data[which(data$Date < "2021-02-18"),]
+
+
+# out of sample (498 obserwacje)
+outs = data[-which(data$Date < "2021-02-18"),]
+
+
+# wykresy zwrotów in sample i out of sample
+plot(ins$Date, ins$total_r, type = "l", col = "black", lwd = 2, main = "Zwroty z portfela in sample",
+     xlab = "Szereg", ylab = "Zwroty z portfela")
+
+plot(outs$Date, outs$total_r, type = "l", col = "blue", lwd = 2, main = "Zwroty z portfela out of sample",
+     xlab = "Szereg", ylab = "Zwroty z portfela")
+```
+
+Okres out of sample stanowi około 30% próby. Podobna skala jest powszechnie wykorzystywana w tego typu analizach. Na wykresach widzimy charakterystyczne dla danych finansowych grupowanie wariancji. Zdecydowanie najwyższa wariancja występuje w okolicach przełomu 2017 i 2018 roku oraz 2020 i 2021. Stopy zwrotów z portfela odnotowały drastyczny, lecz krótkotrwały spadek, gdy pandemia COVID dotarła do świata zachodniego.
+
+##### DOPASOWANIE NAJLEPSZEGO MODELU 
+
+```{r}
+# GARCH(1,1) #
+
+
+spec <- ugarchspec(variance.model = list(model = "sGARCH",
+                                         garchOrder = c(1, 1)),
+                   mean.model = list(armaOrder = c(0, 0),
+                                     include.mean = T),
+                   distribution.model = "norm")
+
+ins.garch11 <- ugarchfit(spec = spec,
+                         data = na.omit(ins$total_r))
+
+
+# MA(1)-GARCH(1,1) #
+
+spec <- ugarchspec(variance.model = list(model = "sGARCH",
+                                         garchOrder = c(1, 1)),
+                   mean.model = list(armaOrder = c(0, 1),
+                                     include.mean = T),
+                   distribution.model = "norm")
+
+ins.garch11ma1 <- ugarchfit(spec = spec,
+                            data = na.omit(ins$total_r))
+
+# AR(1)-GARCH(1,1) #
+
+spec <- ugarchspec(variance.model = list(model = "sGARCH",
+                                         garchOrder = c(1, 1)),
+                   mean.model = list(armaOrder = c(1, 0),
+                                     include.mean = T),
+                   distribution.model = "norm")
+
+ins.garch11ar1 <- ugarchfit(spec = spec,
+                            data = na.omit(ins$total_r))
+
+# ARMA(1,1)-GARCH(1,1) #
+
+spec <- ugarchspec(variance.model = list(model = "sGARCH",
+                                         garchOrder = c(1, 1)),
+                   mean.model = list(armaOrder = c(1, 1),
+                                     include.mean = T),
+                   distribution.model = "norm")
+
+ins.garch11arma11 <- ugarchfit(spec = spec,
+                               data = na.omit(ins$total_r))
+
+# GARCH(1,1) mu = 0 #
+
+spec <- ugarchspec(variance.model = list(model = "sGARCH",
+                                         garchOrder = c(1, 1)),
+                   mean.model = list(armaOrder = c(0,0),
+                                     include.mean = F),
+                   distribution.model = "norm")
+
+ins.garch11mu0 <- ugarchfit(spec = spec,
+                                  data = na.omit(ins$total_r))
+
+# ARMA(1,1)-GARCH(1,1) mu = 0 #
+
+spec <- ugarchspec(variance.model = list(model = "sGARCH",
+                                         garchOrder = c(1, 1)),
+                   mean.model = list(armaOrder = c(1, 1),
+                                     include.mean = F),
+                   distribution.model = "norm")
+
+ins.garch11arma11mu0 <- ugarchfit(spec = spec,
+                                  data = na.omit(ins$total_r))
+
+# MA(1)-GARCH(1,1) mu = 0  #
+
+spec <- ugarchspec(variance.model = list(model = "sGARCH",
+                                         garchOrder = c(1, 1)),
+                   mean.model = list(armaOrder = c(0, 1),
+                                     include.mean = F),
+                   distribution.model = "norm")
+
+ins.garch11ma1mu0 <- ugarchfit(spec = spec,
+                               data = na.omit(ins$total_r))
+# AR(1)-GARCH(1,1) mu = 0  #
+
+spec <- ugarchspec(variance.model = list(model = "sGARCH",
+                                         garchOrder = c(1, 1)),
+                   mean.model = list(armaOrder = c(1, 0),
+                                     include.mean = F),
+                   distribution.model = "norm")
+
+ins.garch11ar1mu0 <- ugarchfit(spec = spec,
+                               data = na.omit(ins$total_r))
+
+
+```
+
+Zgodnie z powszechną praktyką przeważnie model GARCH(1,1) sprawdza się najlepiej. W związku z tym poddano analizie jego zróżnicowane kombinacje z modelami ARMA. Wzięto pod uwagę GARCH(1,1), AR(1)-GARCH(1,1), MA(1)-GARCH(1,1), ARMA(1,1)-GARCH(1,1) oraz analogiczne kombinacje modeli z uwzględnieniem parametru mi.
+
+##### PORÓWNANIE WSZYSTKICH ZBUDOWANYCH MODELI
+
+```{r}
+infocriteria(ins.garch11)
+infocriteria(ins.garch11ma1)
+infocriteria(ins.garch11ar1)
+infocriteria(ins.garch11arma11)
+infocriteria(ins.garch11mu0)
+infocriteria(ins.garch11ma1mu0)
+infocriteria(ins.garch11ar1mu0)
+infocriteria(ins.garch11arma11mu0)
+```
+
+Następnie kierując się kryteriami informacyjnymi wybrano najlepszy model. Wnioski nie są jednoznaczne. Kryterium Bayesowskie oraz Hannan-Quinn osiąga najniższe wartości dla modelu GARCH(1,1), a Akaike i Shibata dla modelu AR(1)-GARCH(1,1). Jednakże po przeanalizowaniu wydruków okazuje się, że parametr przy zmiennej autoregresyjnej jest statystycznie nieistotny. Biorąc pod uwagę, że szacowanie zmiennych nieistotnych obniża efektywność modelu ostatecznie wybrano GARCH(1,1).
+
+```{r}
+plot(ins.garch11mu0, which = 11)
+plot(ins.garch11mu0, which = 10)
+```
+
+Powyższe wykresy sugerują, że autokorelacja reszt mogła nie zostać całkowicie zaabsorbowana przez model. Widzimy 3 istotne opóźnienia na wykresie ACF dla wystandaryzowanych reszt. Autokorelacji nie udało się wyeliminować nawet ustawiając bardzo wysokie paratemtry modelu i rozszerzając model o ARMA. Problem nie musi jednak oznaczać, że wyniki modelu są niewłaściwe. Po pierwsze próba jest dosyć duża, biorąc pod uwagę prostotę modelu (tylko dwie zmienne), a więc tego typu testy będą wykrywać nawet niewielkie nieprawidłowości. Po drugie dane finansowe są z reguły narażone na występowanie autokorelacji, więc jest ona w pewnym stopniu dopuszczalna. Znacznie większą przeszkodą byłaby obecność autokorelacji kwadratów reszt.
+
+```{r}
+ins.garch11mu0
+```
+
+Wszystkie zmienne w modelu są istotne. Parametry nie podlegają ilościowej interpretacji, przydadzą się przy prognozowaniu i wizualizacji graficznej. Formalne testy pokazują brak autokorelacji, autokorelacji kwadratów reszt i efektów ARCH w resztach. Oznacza to, że zostały one odpowiendio zaadresowane przez model.
+
+##### HISTOGRAM RESZT MODELU GARCH(1,1) mi0
+
+```{r}
+hist(ins.garch11mu0@fit$residuals, prob = T, breaks = 50,
+     main = "Histogram reszt modelu GARCH(1,1)", xlab="residuals", col="skyblue1")
+curve(dnorm(x, mean = mean(ins.garch11mu0@fit$residuals, na.rm = T),
+            sd  = sd(ins.garch11mu0@fit$residuals, na.rm = T)),
+      col = "darkblue", lwd = 2, add = TRUE,
+)
+```
+
+Graficzna analiza rozkładu reszt wskazuje na to, że odbiega on od normalnego. Obserwacje są silniej skupione wokół średniej i występuje wyższe prawdopowdobieństwo zaobserwowania wartości skrajnych.
+
+##### STATYSTYKI RESZT MODELU 
+
+```{r}
+empstats <- basicStats(ins.garch11mu0@fit$residuals)
+knitr::kable(as.matrix(empstats), digits = 2)
+```
+
+##### RESZTY - BADANIE ROZKLADU 
+
+```{r}
+jbtest_residuals <- jarque.bera.test(ins.garch11mu0@fit$residuals)
+jbtest_residuals
+```
+
+Na każdym sensownym poziomie istotności należy odrzucić H0 o rozkładzie normalnym reszt.
+
+##### WYKRES RESZT
+
+```{r}
+plot(ins.garch11mu0@fit$residuals, type ="l", lwd = 2, main = "Reszty modelu GARCH(1,1)", ylab = "Reszty")
+```
+
+Wykres pokazuje, że reszty są procesem stacjonarnym. Być może model nie zaabsorbował odpowiednio zjawiska grupowania wariancji.
+
+### **PROGNOZY W. WARIANCJI**
+
+```{r}
+### model GARCH(1,1) mi0
+
+# oceny parametrów
+ins.garch11mu0@fit$coef
+
+# bezwarunkowa wariancja
+var_uncond <- ins.garch11mu0@fit$coef[1] / (1 - ins.garch11mu0@fit$coef[2]
+                                      - ins.garch11mu0@fit$coef[3])
+names(var_uncond) <- "unconditional variance"
+var_uncond
+```
+
+```{r results='hide'}
+# prognozy warunkowej wariancji na 100 okresóW
+fore100 <- ugarchforecast(ins.garch11mu0, n.ahead = 100)
+sigma(fore100)
+```
+
+```{r}
+# wykres 
+plot(sigma(fore100)^2, type = "l",  ylim = c(0.0038, 0.0050))
+abline(h = var_uncond, col = "red", lty = 2)
+title(main = "Warunkowa i bezwarunkowa wariancja zwrotów")
+
+# analogicznie dla 300 okresóW
+fore300 <- ugarchforecast(ins.garch11mu0, n.ahead = 300)
+plot(sigma(fore300)^2, type = "l",  ylim = c(0.0038, 0.0050))
+abline(h = var_uncond, col = "red", lty = 2)
+title(main = "Warunkowa i bezwarunkowa wariancja zwrotów")
+
+```
+
+Zgodnie z założeniami modelu prognozy warunkowej wariancji zbiegają w długim okresie do poziomu wariancji bezwarunkowej. Model prognozuje wygasanie wariancji.
+
+<p style="text-align:left;">
+### **VAULE-AT-RISK**
+</p>
+
+```{r results='hide'}
+ins <- ins[ins$Date > as.Date("2017-09-18"), ] # ucięcie jednej brakującej obserwacji
+
+# standaryzacja zwrotow i pierwszy kwantyl empiryczny in sample
+ins$total_r_std <- (ins$total_r - mean(ins$total_r, na.rm=T)) /
+  sd(ins$total_r, na.rm = T)
+
+total_r_std_q01 <- quantile(ins$total_r_std, 0.01, na.rm = T)
+total_r_std_q01
+
+#### VaR w okresie in sample
+ins.garch11mu0@fit$sigma
+```
+
+```{r}
+# obliczanie wartości narażonej na ryzyko 
+ins$VaR <- total_r_std_q01 * ins.garch11mu0@fit$sigma
+
+# wyres zwrotóW i VaR
+plot(ins$Date, ins$total_r, col = "red", lwd = 1, type = 'l',
+     ylab = "zwroty vs VaR", xlab = "Szereg w okresie IN-SAMPLE", main = "Oszacowania 1% Value at Risk")
+abline(h = 0, lty = 2)
+lines(ins$Date, ins$VaR, type = 'l', col = "green")
+
+# w ilu przypadkach straty przekroczyły zakładany poziom VaR?
+sum(ins$total_r < ins$VaR) / length(ins$VaR) # 0.009638554
+```
+
+Powyższy wykres przedstwawia wartość narażoną na ryzyko w okresie in sample. Przyjęty poziom istotności to 1%. Straty przekraczają zakładany poziom w około 1% przypadków. 
+
+```{r}
+#### VaR w okresie OUT-OF-SAMPLE
+
+# 1-dniowa prognoza warunkowego odchylenia standardowego
+#plot(ugarchforecast(ins.garch11mu0, n.ahead = 1))
+
+sigma.forecast <- ugarchforecast(ins.garch11mu0, n.ahead = 1)
+sigma.forecast2 <- sigma.forecast@forecast$sigmaFor[1, 1]
+
+# Szacowanie 1-dniowej VaR dla całego okresu OUT-OF-SAMPLE
+data$obs = 1:length(data$total_r)
+start  <- data$obs[data$Date == as.Date("2021-02-18")]
+finish <- data$obs[data$Date == as.Date("2022-06-30")]
+data2 <-data[start:finish, ]
+VaR <- rep(NA, times = finish - start + 1)
+
+for (k in start:finish) {
+  tmp.data <- data[data$obs <= (k - 1), ]
+  tmp.data$rstd <- (tmp.data$total_r - mean(tmp.data$total_r, na.rm = T)) /
+    sd(tmp.data$total_r, na.rm = T)
+  q01 <- quantile(tmp.data$rstd, 0.01, na.rm = T)
+  spec <- ugarchspec(variance.model = list(model = "sGARCH",
+                                           garchOrder = c(1, 1)),
+                     mean.model = list(armaOrder = c(0, 0),
+                                       include.mean = F),
+                     distribution.model = "norm")
+  tmp.garch11mu0 <- ugarchfit(spec = spec, data = na.omit(tmp.data$total_r))
+  sigma.forecast  <- ugarchforecast(tmp.garch11mu0, n.ahead = 1)
+  sigma.forecast2 <- sigma.forecast@forecast$sigmaFor[1, 1]
+  VaR[k - start + 1] <- q01 * sigma.forecast2
+}
+
+data2$VaR <- VaR
+
+# wyres zwrotóW i VaR w okresie OUT-OF-SAMPLE
+
+plot(data2$Date, data2$total_r, col = "red", lwd = 1, type = 'l',
+     ylab = "Zwroty vs VaR", xlab = "Szereg w okresie OUT-OF-SAMPLE", main = "Oszacowania 1% Value at Risk")
+abline(h = 0, lty = 2)
+lines(data2$Date, data2$VaR, type = 'l', col = "green")
+
+# w ilu przypadkach straty przekroczyły zakładany poziom VaR
+
+sum(data2$total_r < data2$VaR) / length(data2$VaR) # 0.01204819
+```
+
+W okresie out of sample straty przekroczyły zakładany poziom w około 1,2% przypadków. Jest to zadowalający poziom, szczególnie gdy weźmiemy pod uwagę niestabilną rzeczywistość pandemiczną na rynkach finansowych. Największą słabością modelu jest rozkład reszt, który zauważalnie odbiega od normalnego.
+
+## **GARCH-t**
+
+Poniżej przeprowadzona została analogiczna analiza dla modelu GARCH-t. Testy w poprzednim przykladzie pokazaly, że rozklad reszt nie jest normalny, więc być może reszty lepiej opisze rozklad t-studenta
+
+```{r}
+# GARCH(1,1) #
+
+
+spec <- ugarchspec(
+  variance.model = list(model = "sGARCH",
+                        garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(0, 0),
+                    include.mean = T),
+  distribution.model = "std")
+
+ins.garch11 <- ugarchfit(spec = spec,
+                         data = na.omit(ins$total_r))
+
+
+# MA(1)-GARCH(1,1) #
+
+spec <- ugarchspec(
+  variance.model = list(model = "sGARCH",
+                        garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(0, 1),
+                    include.mean = T),
+  distribution.model = "std")
+
+ins.garch11ma1 <- ugarchfit(spec = spec,
+                         data = na.omit(ins$total_r))
+
+# AR(1)-GARCH(1,1) #
+
+spec <- ugarchspec(
+  variance.model = list(model = "sGARCH",
+                        garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(1, 0),
+                    include.mean = T),
+  distribution.model = "std")
+
+ins.garch11ar1 <- ugarchfit(spec = spec,
+                         data = na.omit(ins$total_r))
+
+# ARMA(1,1)-GARCH(1,1) #
+
+spec <- ugarchspec(
+  variance.model = list(model = "sGARCH",
+                        garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(1, 1),
+                    include.mean = T),
+  distribution.model = "std")
+
+ins.garch11arma11 <- ugarchfit(spec = spec,
+                         data = na.omit(ins$total_r))
+
+# GARCH(1,1) mu = 0 #
+
+spec <- ugarchspec(
+  variance.model = list(model = "sGARCH",
+                        garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(0, 0),
+                    include.mean = F),
+  distribution.model = "std")
+
+ins.garch11mu0 <- ugarchfit(spec = spec,
+                         data = na.omit(ins$total_r))
+
+# ARMA(1,1)-GARCH(1,1) mu = 0 #
+
+spec <- ugarchspec(
+  variance.model = list(model = "sGARCH",
+                        garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(1, 1),
+                    include.mean = F),
+  distribution.model = "std")
+
+ins.garch11arma11mu0 <- ugarchfit(spec = spec,
+                         data = na.omit(ins$total_r))
+
+# MA(1)-GARCH(1,1) mu = 0  #
+
+spec <- ugarchspec(
+  variance.model = list(model = "sGARCH",
+                        garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(0, 1),
+                    include.mean = F),
+  distribution.model = "std")
+
+ins.garch11ma1mu0 <- ugarchfit(spec = spec,
+                         data = na.omit(ins$total_r))
+
+# AR(1)-GARCH(1,1) mu = 0  #
+
+spec <- ugarchspec(
+  variance.model = list(model = "sGARCH",
+                        garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(1, 0),
+                    include.mean = F),
+  distribution.model = "std")
+
+ins.garch11ar1mu0 <- ugarchfit(spec = spec,
+                         data = na.omit(ins$total_r))
+
+```
+
+##### PORÓWNANIE WSZYSTKICH ZBUDOWANYCH MODELI
+
+```{r}
+infocriteria(ins.garch11)
+infocriteria(ins.garch11ma1)
+infocriteria(ins.garch11ar1)
+infocriteria(ins.garch11arma11)
+infocriteria(ins.garch11mu0)
+infocriteria(ins.garch11ma1mu0)
+infocriteria(ins.garch11ar1mu0)
+infocriteria(ins.garch11arma11mu0)
+```
+
+Model AR(1) GARCH(1,1)-t ma najniższe wartości dla 3 z 4 kryteriów informacyjnych. Na tej podstawie został wybrany do dalszej analizy.
+
+```{r}
+plot(ins.garch11ar1, which = 11)
+plot(ins.garch11ar1, which = 10)
+```
+
+Wykresy wyglądają nieco gorzej niż w poprzednim modelu. Wykres ACF dla kwadratów reszt ponownie pokazuje tylko jedną istotną wartość. Pozostałe są znacząco nieistotne, więc można przyjąć to za satysfakcjonujący rezultat. Autokorelacja jest istotna dla 4 opóźnień, więc model nie radzi sobie z jej odpowiednim zaadresowaniem.
+
+```{r}
+ins.garch11ar1
+```
+
+Wsztystkie zmienne w modelu są statystycznie istotne (poziom p-value 0.055327 dla zmiennej omega uważamy za dopuszczalny). Test Ljung-Box'a nie daje podstaw do odrzucenia H0 o braku autokolelacji kwadratów reszt dla każdego z opóźnień. Test na występowanie efektów ARCH wypada nieco gorzej niż w poprzednim modelu. Dla 5 opóźnień p-value wynosi 0,027, więc na poziomie 5% należałoby odrzucić H0 o braku efektu w resztach. Ponownie wraca problem autokorelacji. Tym razem formalny test nakazuje odrzucić H0 o jej braku. Jednakże jak opisano wyżej, problem ten nie musi drastycznie zaburzać wnioskowania z modelu.
+
+##### STATYSTYKI RESZT MODELU 
+
+```{r}
+empstats <- basicStats(ins.garch11ar1@fit$residuals)
+knitr::kable(as.matrix(empstats), digits = 2)
+```
+
+##### WYKRES RESZT
+
+```{r}
+plot(ins.garch11ar1@fit$residuals, type ="l", lwd = 2, main = "Reszty modelu AR(1)-GARCH(1,1)-t", ylab = "Reszty")
+```
+
+Wykres pokazuje, że reszty są procesem stacjonarnym. Model prawdopodobnie nie zaabsorbował odpowiednio zjawiska grupowania wariancji.
+
+
+<p style="text-align:left;">
+### **PROGNOZY W. WARIANCJI**
+</p>
+
+```{r}
+# oceny parametrów
+ins.garch11ar1@fit$coef
+
+# bezwarunkowa wariancja
+var_uncond <- ins.garch11ar1@fit$coef[3] / (1 - ins.garch11ar1@fit$coef[4]
+                                            - ins.garch11ar1@fit$coef[5])
+names(var_uncond) <- "unconditional variance"
+#var_uncond
+
+# prognozy warunkowej wariancji na 100 okresóW
+fore100 <- ugarchforecast(ins.garch11ar1, n.ahead = 100)
+#sigma(fore100)
+
+# wykres 
+plot(sigma(fore100)^2, type = "l",  ylim = c(0.0054, 0.006))
+abline(h = var_uncond, col = "red", lty = 2)
+title(main = "Warunkowa i bezwarunkowa wariancja zwrotów")
+
+# analogicznie dla 300 okresóW
+fore300 <- ugarchforecast(ins.garch11ar1, n.ahead = 300)
+plot(sigma(fore300)^2, type = "l",  ylim = c(0.0054, 0.006))
+abline(h = var_uncond, col = "red", lty = 2)
+title(main = "Warunkowa i bezwarunkowa wariancja zwrotów")
+
+```
+
+Zgodnie z oczekiwaniami prognozy warunkowej wariancji zbiegają w długim okresie do poziomu wariancji bezwarunkowej. Co ciekawe wnioski są lustrzanym odbiciem rezultatów poprzedniego modelu. W tamtym wypadku zaobserowaliśmy wygaszanie wariancji.
+
+<p style="text-align:left;">
+### **VAULE-AT-RISK**
+</p>
+
+
+```{r}
+ins <- ins[ins$Date > as.Date("2017-09-18"), ] # ucięcie jednej brakującej obserwacji
+
+# standaryzacja zwrotow i pierwszy kwantyl empiryczny in sample
+ins$total_r_std <- (ins$total_r - mean(ins$total_r, na.rm=T)) /
+  sd(ins$total_r, na.rm = T)
+
+total_r_std_q01 <- quantile(ins$total_r_std, 0.01, na.rm = T)
+total_r_std_q01
+
+#### VaR w okresie in sample
+#ins.garch11ar1@fit$sigma
+
+
+# obliczanie wartości narażonej na ryzyko 
+ins$VaR <- total_r_std_q01 * ins.garch11ar1@fit$sigma
+
+# wyres zwrotóW i VaR
+plot(ins$Date, ins$total_r, col = "red", lwd = 1, type = 'l',
+     ylab = "zwroty vs VaR", xlab = "Szereg w okresie IN-SAMPLE", main = "Oszacowania 1% Value at Risk")
+abline(h = 0, lty = 2)
+lines(ins$Date, ins$VaR, type = 'l', col = "green")
+
+# w ilu przypadkach straty przekroczyły zakładany poziom VaR?
+sum(ins$total_r < ins$VaR) / length(ins$VaR) # 0.008835341
+```
+
+W okresie in sample straty przekraczają zakładany poziom VaR w około 0,8% przypadków.
+
+```{r}
+#### VaR w okresie OUT-OF-SAMPLE
+
+# 1-dniowa prognoza warunkowego odchylenia standardowego
+#plot(ugarchforecast(ins.garch11ar1, n.ahead = 1))
+
+sigma.forecast <- ugarchforecast(ins.garch11ar1, n.ahead = 1)
+sigma.forecast2 <- sigma.forecast@forecast$sigmaFor[1, 1]
+
+# Szacowanie 1-dniowej VaR dla całego okresu OUT-OF-SAMPLE
+data$obs = 1:length(data$total_r)
+start  <- data$obs[data$Date == as.Date("2021-02-18")]
+finish <- data$obs[data$Date == as.Date("2022-06-30")]
+data2 <-data[start:finish, ]
+VaR <- rep(NA, times = finish - start + 1)
+
+for (k in start:finish) {
+  tmp.data <- data[data$obs <= (k - 1), ]
+  tmp.data$rstd <- (tmp.data$total_r - mean(tmp.data$total_r, na.rm = T)) /
+    sd(tmp.data$total_r, na.rm = T)
+  q01 <- quantile(tmp.data$rstd, 0.01, na.rm = T)
+  spec <- ugarchspec(variance.model = list(model = "sGARCH",
+                                           garchOrder = c(1, 1)),
+                     mean.model = list(armaOrder = c(1, 0),
+                                       include.mean = T),
+                     distribution.model = "std")
+  tmp.garch11ar1 <- ugarchfit(spec = spec, data = na.omit(tmp.data$total_r))
+  sigma.forecast  <- ugarchforecast(tmp.garch11ar1, n.ahead = 1)
+  sigma.forecast2 <- sigma.forecast@forecast$sigmaFor[1, 1]
+  VaR[k - start + 1] <- q01 * sigma.forecast2
+}
+
+data2$VaR <- VaR
+
+# wyres zwrotóW i VaR w okresie OUT-OF-SAMPLE
+
+plot(data2$Date, data2$total_r, col = "red", lwd = 1, type = 'l',
+     ylab = "zwroty vs VaR", xlab = "Szereg w okresie OUT-OF-SAMPLE", main = "Oszacowania 1% Value at Risk")
+abline(h = 0, lty = 2)
+lines(data2$Date, data2$VaR, type = 'l', col = "green")
+
+# w ilu przypadkach straty przekroczyły zakładany poziom VaR
+
+sum(data2$total_r < data2$VaR) / length(data2$VaR) # 0.01405622
+```
+
+W okresie out of sample straty przekraczają zakładany poziom VaR w około 1,4% przypadków. Są to wyniki bardzo zbliżone do poprzedniego modelu.
+
+<p style="text-align:left;">
+## **ZAKOŃCZENIE**
+</p>
+
+Badana zmienna spełnia wszystkie charakterystyczne dla danych finansowych cechy: leptokurtyczny rozkład, efekt dźwigni i grupowanie wariancji. Przy pomocy modeli GARCH oszacowano realizację warunkowej wariancji i wartości narażonej na ryzyko. Wykorzystano dwa alternatywne modele: GARCH(1,1) i AR(1)-GARCH(1,1)-t. Oba dają podobną skuteczność w zakresie wartości narażonej na ryzyko, lecz prognozują wariancję w odmienny sposób. Wydaje się, że model GARCH(1,1) powinien być bardziej wiarygodny ze względu na lepszą diagnostykę koniecznych założeń.
