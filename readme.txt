@@ -1,1 +1,1 @@
-Celem projektuy było zbadanie ryzyka portfela kryptowalut. Repozytorium zawiera raport wygenerowany w HTML.
+Celem projektu było zbadanie ryzyka portfela kryptowalut. Repozytorium zawiera raport wygenerowany w HTML.
